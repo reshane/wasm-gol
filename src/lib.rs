@@ -1,15 +1,113 @@
 use wasm_bindgen::prelude::*;
-use std::fmt::{Display, Formatter};
+use std::{cell::RefCell, fmt::{Display, Formatter}, rc::Rc};
+use web_sys::HtmlCanvasElement;
 
-#[wasm_bindgen]
-#[repr(u8)]
+const CELL_SIZE: u32 = 5;
+const GRID_COLOR: &'static str = "#CCCCCC";
+const DEAD_COLOR: &'static str  = "#FFFFFF";
+const ALIVE_COLOR: &'static str = "#000000";
+
+fn window() -> web_sys::Window {
+    web_sys::window().expect("should have a window in this context")
+}
+
+fn request_animation_frame(f: &Closure<dyn FnMut()>) {
+    window()
+    .request_animation_frame(f.as_ref().unchecked_ref())
+        .expect("should be able to request animation frame");
+}
+
+fn document() -> web_sys::Document {
+    window().document().expect("window should have a document")
+}
+
+fn canvas() -> web_sys::HtmlCanvasElement {
+    let canvas = document().get_element_by_id("canvas").unwrap();
+    canvas
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .map_err(|_| ())
+        .unwrap()
+}
+
+#[wasm_bindgen(start)]
+async fn run() -> Result<(), JsValue> {
+    let f = Rc::new(RefCell::new(None));
+
+    let g = f.clone();
+    {
+        let mut universe = Universe::new();
+        let canvas = canvas();
+        canvas.set_attribute("width", format!("{}", (CELL_SIZE + 1) * universe.width() + 1).as_str())?;
+        canvas.set_attribute("height", format!("{}", (CELL_SIZE + 1) * universe.height() + 1).as_str())?;
+        *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+            universe.tick();
+            draw_grid(&canvas, universe.width(), universe.height());
+            draw_cells(&canvas, &universe);
+            request_animation_frame(f.borrow().as_ref().unwrap());
+        }) as Box<dyn FnMut()>));
+    }
+
+    request_animation_frame(g.borrow().as_ref().unwrap());
+
+    Ok(())
+}
+
+fn draw_grid(canvas: &HtmlCanvasElement, width: u32, height: u32) {
+    let ctx = canvas.get_context("2d")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()
+        .unwrap();
+    ctx.begin_path();
+    ctx.set_stroke_style_str(GRID_COLOR);
+
+    // Vertical lines
+    for i in 0..width {
+        ctx.move_to((i * (CELL_SIZE + 1) + 1) as f64, 0_f64);
+        ctx.line_to((i * (CELL_SIZE + 1) + 1) as f64, ((CELL_SIZE + 1) * height + 1) as f64);
+    }
+
+    // Horizontal lines
+    for i in 0..height {
+        ctx.move_to(0_f64, (i * (CELL_SIZE + 1) + 1) as f64);
+        ctx.line_to(((CELL_SIZE + 1) * width + 1) as f64, (i * (CELL_SIZE + 1) + 1) as f64);
+    }
+
+    ctx.stroke();
+}
+
+fn draw_cells(canvas: &HtmlCanvasElement, universe: &Universe) {
+    let (width, height) = (universe.width(), universe.height());
+    let ctx = canvas.get_context("2d")
+        .unwrap()
+        .unwrap()
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()
+        .unwrap();
+    ctx.begin_path();
+
+    for row in 0..height {
+        for col in 0..width {
+            let idx = universe.get_idx(row as usize, col as usize);
+            ctx.set_fill_style_str(match universe.cells[idx] {
+            Cell::Dead => DEAD_COLOR,
+            Cell::Alive => ALIVE_COLOR,
+            });
+
+            ctx.fill_rect(
+                (col * (CELL_SIZE + 1) + 1) as f64,
+                (row * (CELL_SIZE + 1) + 1) as f64,
+                CELL_SIZE as f64, CELL_SIZE as f64
+            );
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cell {
     Dead = 0,
     Alive = 1,
 }
 
-#[wasm_bindgen]
 struct Universe {
     width: usize,
     height: usize,
@@ -50,10 +148,7 @@ impl Universe {
         }
         count
     }
-}
 
-#[wasm_bindgen]
-impl Universe {
     pub fn tick(&mut self) {
         let mut next = self.cells.clone();
         
@@ -93,19 +188,11 @@ impl Universe {
         }
     }
 
-    pub fn render(&self) -> String {
-        self.to_string()
-    }
-
     pub fn width(&self) -> u32 {
         self.width as u32
     }
 
     pub fn height(&self) -> u32 {
         self.height as u32
-    }
-
-    pub fn cells(&self) -> *const Cell {
-        self.cells.as_ptr()
     }
 }
